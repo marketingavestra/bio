@@ -215,8 +215,51 @@
             }
         }
     </style>
+
+    <!-- ================================================
+         RASTREAMENTO — NÃO REMOVER
+         GTM: GTM-W98WXF4D | Pixel: 953525720407387 | GA4: G-D5JLH6DX71
+    ================================================ -->
+
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+    new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+    })(window,document,'script','dataLayer','GTM-W98WXF4D');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Meta Pixel (browser-side direto — fallback se GTM for bloqueado) -->
+    <script>
+    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+    n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}
+    (window,document,'script','https://connect.facebook.net/en_US/fbevents.js');
+    fbq('init', '953525720407387');
+    fbq('track', 'PageView');
+    </script>
+    <noscript><img height="1" width="1" style="display:none"
+    src="https://www.facebook.com/tr?id=953525720407387&ev=PageView&noscript=1"/></noscript>
+    <!-- End Meta Pixel -->
+
+    <!-- Google Analytics 4 (direto — complementa o GTM) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-D5JLH6DX71"></script>
+    <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-D5JLH6DX71', { page_title: 'Link Bio - Wladmir Bonadio', page_location: window.location.href });
+    </script>
+    <!-- End Google Analytics 4 -->
+
 </head>
 <body>
+    <!-- Google Tag Manager (noscript) -->
+    <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-W98WXF4D"
+    height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+    <!-- End Google Tag Manager (noscript) -->
+
     <div class="container">
         <!-- Profile Photo -->
         <div class="profile-photo">
@@ -290,5 +333,71 @@
         <!-- Footer -->
         <p class="footer">Todos os Direitos Reservados - Feito por <a href="https://wa.me/+5534991839854" target="_blank" style="color: inherit; text-decoration: underline;">AVESTRA</a></p>
     </div>
+
+    <!-- ================================================
+         UTM PASS-THROUGH + CLICK TRACKING
+         Passa UTMs da URL do bio para links internos e
+         registra cliques no dataLayer para retargeting.
+    ================================================ -->
+    <script>
+    window.addEventListener('load', function() {
+
+      // --- 1. UTM Pass-Through ---
+      // Captura UTMs da URL atual (ex: links.bonadio.site?utm_source=instagram)
+      // e injeta nos links que apontam para wladmirbonadio.com.br
+      var urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.toString()) {
+        document.querySelectorAll('a').forEach(function(link) {
+          if (link.href && link.href.includes('bonadio.site')) {
+            try {
+              var url = new URL(link.href);
+              urlParams.forEach(function(value, key) {
+                url.searchParams.set(key, value);
+              });
+              link.href = url.toString();
+            } catch(e) {}
+          }
+        });
+      }
+
+      // --- 2. Click Tracking nos botões de link ---
+      // Cada clique gera um evento no dataLayer (GTM lê) e no Meta Pixel
+      document.querySelectorAll('.link-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var label = btn.textContent.trim().replace(/\s+/g, ' ');
+          var dest  = btn.href || '';
+
+          // Push para GTM / GA4
+          window.dataLayer = window.dataLayer || [];
+          window.dataLayer.push({
+            event:      'link_bio_click',
+            link_label: label,
+            link_url:   dest
+          });
+
+          // Evento customizado no Meta Pixel (cria audiência "clicou mas não inscreveu")
+          if (window.fbq) {
+            fbq('trackCustom', 'LinkBioClick', { label: label, destination: dest });
+          }
+        });
+      });
+
+      // --- 3. Click Tracking nos links sociais ---
+      document.querySelectorAll('.social-link').forEach(function(link) {
+        link.addEventListener('click', function() {
+          var label = link.getAttribute('aria-label') || 'Social';
+          window.dataLayer = window.dataLayer || [];
+          window.dataLayer.push({
+            event:       'link_bio_social_click',
+            social_name: label,
+            link_url:    link.href
+          });
+        });
+      });
+
+    });
+    </script>
+    <!-- End UTM Pass-Through + Click Tracking -->
+
 </body>
 </html>
