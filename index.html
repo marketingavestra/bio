@@ -334,70 +334,231 @@
         <p class="footer">Todos os Direitos Reservados - Feito por <a href="https://wa.me/+5534991839854" target="_blank" style="color: inherit; text-decoration: underline;">AVESTRA</a></p>
     </div>
 
-    <!-- ================================================
-         UTM PASS-THROUGH + CLICK TRACKING
-         Passa UTMs da URL do bio para links internos e
-         registra cliques no dataLayer para retargeting.
-    ================================================ -->
-    <script>
-    window.addEventListener('load', function() {
+    <!-- ════════════════════════════════════════════════════════════════
+         AVESTRA TRACKER v2 — UTM + Lead Score + Supabase
+         SQL para criar a tabela (rodar no Supabase SQL Editor):
 
-      // --- 1. UTM Pass-Through ---
-      // Captura UTMs da URL atual (ex: links.bonadio.site?utm_source=instagram)
-      // e injeta nos links que apontam para wladmirbonadio.com.br
-      var urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.toString()) {
-        document.querySelectorAll('a').forEach(function(link) {
-          if (link.href && link.href.includes('bonadio.site')) {
-            try {
-              var url = new URL(link.href);
-              urlParams.forEach(function(value, key) {
-                url.searchParams.set(key, value);
-              });
-              link.href = url.toString();
-            } catch(e) {}
-          }
-        });
+         create table if not exists public.bio_events (
+           id            uuid        default gen_random_uuid() primary key,
+           created_at    timestamptz default now(),
+           event_type    text        not null,
+           page          text,
+           session_id    text,
+           utm_source    text,
+           utm_medium    text,
+           utm_campaign  text,
+           utm_content   text,
+           utm_term      text,
+           link_id       text,
+           link_label    text,
+           link_href     text,
+           score_delta   int         default 0,
+           session_score int         default 0,
+           referrer      text,
+           device        text
+         );
+         alter table public.bio_events enable row level security;
+         create policy "anon_insert" on public.bio_events
+           for insert to anon with check (true);
+
+    ════════════════════════════════════════════════════════════════ -->
+    <script>
+    (function() {
+
+      /* ── CONFIG ─────────────────────────────────────────────────────── */
+      var CFG = {
+        SUPABASE_URL:  'https://SEU_PROJETO.supabase.co',   // ← preencher
+        SUPABASE_KEY:  'eyJ_SEU_ANON_KEY',                  // ← preencher
+        TABLE:         'bio_events',
+        PAGE:          'links_bonadio',
+      };
+
+      /* Score de intenção por link */
+      var SCORES = {
+        'ias':          3,   // IAs do escritório → intenção comercial
+        'sala_secreta': 2,   // Aula gratuita → lead quente
+        'blog':         1,   // Topo de funil
+        'whatsapp':     5,   // Contato direto → altíssima intenção
+        'youtube':      1,
+        'linkedin':     1,
+        'instagram':    1,
+      };
+
+      /* ── HELPERS ────────────────────────────────────────────────────── */
+      function getUTMs() {
+        var p = new URLSearchParams(window.location.search);
+        return {
+          utm_source:   p.get('utm_source')   || '',
+          utm_medium:   p.get('utm_medium')   || '',
+          utm_campaign: p.get('utm_campaign') || '',
+          utm_content:  p.get('utm_content')  || '',
+          utm_term:     p.get('utm_term')     || '',
+        };
       }
 
-      // --- 2. Click Tracking nos botões de link ---
-      // Cada clique gera um evento no dataLayer (GTM lê) e no Meta Pixel
-      document.querySelectorAll('.link-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var label = btn.textContent.trim().replace(/\s+/g, ' ');
-          var dest  = btn.href || '';
+      function getDevice() {
+        var ua = navigator.userAgent;
+        if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
+        if (/mobile|iphone|ipod|android|blackberry|mini/i.test(ua)) return 'mobile';
+        return 'desktop';
+      }
 
-          // Push para GTM / GA4
-          window.dataLayer = window.dataLayer || [];
-          window.dataLayer.push({
-            event:      'link_bio_click',
-            link_label: label,
-            link_url:   dest
+      function getSession() {
+        var id = sessionStorage.getItem('avs_sid');
+        if (!id) {
+          id = 'xxxxxxxx-xxxx-4xxx-yxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+          }) + Date.now().toString(36);
+          sessionStorage.setItem('avs_sid', id);
+        }
+        return id;
+      }
+
+      function getScore()        { return parseInt(sessionStorage.getItem('avs_score') || '0'); }
+      function addScore(delta)   { var n = getScore() + delta; sessionStorage.setItem('avs_score', n); return n; }
+
+      function identifyLink(href) {
+        if (!href) return 'other';
+        if (href.includes('avestra.site/hub'))    return 'ias';
+        if (href.includes('/blog'))               return 'blog';
+        if (href.includes('sala-secreta'))        return 'sala_secreta';
+        if (href.includes('wa.me'))               return 'whatsapp';
+        if (href.includes('youtube'))             return 'youtube';
+        if (href.includes('linkedin'))            return 'linkedin';
+        if (href.includes('instagram'))           return 'instagram';
+        return 'other';
+      }
+
+      /* ── STATE ──────────────────────────────────────────────────────── */
+      var utms      = getUTMs();
+      var sessionId = getSession();
+
+      // Persistir UTMs na sessão para navegar entre páginas sem perder a origem
+      if (utms.utm_source) {
+        sessionStorage.setItem('avs_utms', JSON.stringify(utms));
+      } else {
+        try {
+          var stored = JSON.parse(sessionStorage.getItem('avs_utms') || '{}');
+          Object.keys(stored).forEach(function(k) { if (!utms[k]) utms[k] = stored[k]; });
+        } catch(e) {}
+      }
+
+      /* ── SUPABASE SEND ──────────────────────────────────────────────── */
+      function track(event_type, extra) {
+        if (CFG.SUPABASE_URL.indexOf('SEU_PROJETO') > -1) return; // placeholder — não envia
+
+        var payload = Object.assign({
+          event_type:    event_type,
+          page:          CFG.PAGE,
+          session_id:    sessionId,
+          utm_source:    utms.utm_source,
+          utm_medium:    utms.utm_medium,
+          utm_campaign:  utms.utm_campaign,
+          utm_content:   utms.utm_content,
+          utm_term:      utms.utm_term,
+          referrer:      document.referrer || '',
+          device:        getDevice(),
+          session_score: getScore(),
+        }, extra || {});
+
+        try {
+          fetch(CFG.SUPABASE_URL + '/rest/v1/' + CFG.TABLE, {
+            method:    'POST',
+            keepalive: true,
+            headers: {
+              'Content-Type':  'application/json',
+              'apikey':        CFG.SUPABASE_KEY,
+              'Authorization': 'Bearer ' + CFG.SUPABASE_KEY,
+              'Prefer':        'return=minimal',
+            },
+            body: JSON.stringify(payload),
           });
+        } catch(e) { /* nunca quebrar UX por causa de tracking */ }
+      }
 
-          // Evento customizado no Meta Pixel (cria audiência "clicou mas não inscreveu")
-          if (window.fbq) {
-            fbq('trackCustom', 'LinkBioClick', { label: label, destination: dest });
-          }
+      /* ── GTM / META PIXEL ───────────────────────────────────────────── */
+      function pushGTM(event_name, data) {
+        window.dataLayer = window.dataLayer || [];
+        window.dataLayer.push(Object.assign({ event: event_name }, data, utms));
+      }
+      function pushPixel(event_name, data) {
+        if (window.fbq) fbq('trackCustom', event_name, Object.assign({}, data, utms));
+      }
+
+      /* ── UTM PROPAGATION ────────────────────────────────────────────── */
+      function propagateUTMs(link) {
+        var href = link.getAttribute('href') || '';
+        // Propaga para qualquer link outbound (exceto WhatsApp e social media — UTM quebraria)
+        var skipPatterns = ['wa.me', 'instagram.com', 'youtube.com', 'linkedin.com'];
+        var skip = skipPatterns.some(function(p) { return href.includes(p); });
+        if (!skip && utms.utm_source && href.indexOf('http') === 0) {
+          try {
+            var url = new URL(href);
+            Object.keys(utms).forEach(function(k) { if (utms[k]) url.searchParams.set(k, utms[k]); });
+            link.href = url.toString();
+          } catch(e) {}
+        }
+      }
+
+      /* ── PAGE VIEW ──────────────────────────────────────────────────── */
+      track('page_view');
+      pushGTM('link_bio_page_view', { page: CFG.PAGE });
+
+      /* ── CLICK TRACKING ─────────────────────────────────────────────── */
+      window.addEventListener('load', function() {
+
+        // Pré-propagação de UTMs em todos os links (ao carregar)
+        document.querySelectorAll('a[href]').forEach(propagateUTMs);
+
+        // Listeners de clique
+        document.querySelectorAll('a[href]').forEach(function(link) {
+          link.addEventListener('click', function() {
+            var href       = link.getAttribute('href') || '';
+            var label      = link.textContent.trim().replace(/\s+/g, ' ').substring(0, 80);
+            var ariaLabel  = link.getAttribute('aria-label') || '';
+            var displayLabel = ariaLabel || label;
+            var linkId     = identifyLink(href);
+            var delta      = SCORES[linkId] || 0;
+            var score      = addScore(delta);
+
+            // Supabase
+            track('link_click', {
+              link_id:       linkId,
+              link_label:    displayLabel,
+              link_href:     href,
+              score_delta:   delta,
+              session_score: score,
+            });
+
+            // GTM
+            pushGTM('link_bio_click', {
+              link_id:    linkId,
+              link_label: displayLabel,
+              link_url:   href,
+              lead_score: score,
+            });
+
+            // Meta Pixel
+            pushPixel('LinkBioClick', {
+              link_id:    linkId,
+              link_label: displayLabel,
+              lead_score: score,
+            });
+
+            // WhatsApp = lead quente → evento de conversão no Pixel
+            if (linkId === 'whatsapp') {
+              pushGTM('whatsapp_click', { lead_score: score });
+              if (window.fbq) fbq('track', 'Contact', { lead_score: score });
+            }
+          });
         });
+
       });
 
-      // --- 3. Click Tracking nos links sociais ---
-      document.querySelectorAll('.social-link').forEach(function(link) {
-        link.addEventListener('click', function() {
-          var label = link.getAttribute('aria-label') || 'Social';
-          window.dataLayer = window.dataLayer || [];
-          window.dataLayer.push({
-            event:       'link_bio_social_click',
-            social_name: label,
-            link_url:    link.href
-          });
-        });
-      });
-
-    });
+    })();
     </script>
-    <!-- End UTM Pass-Through + Click Tracking -->
+    <!-- End AVESTRA TRACKER v2 -->
 
 </body>
 </html>
